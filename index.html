@@ -89,72 +89,58 @@
       statsBar.classList.remove('hidden');
       recordCount.textContent = `${products.length} Product Records`;
 
-      products.forEach(product => {
+      products.forEach((product, index) => {
         // Basic Metadata
-        const recordRef = getDirectText(product, 'RecordReference');
-        const formDesc = getDirectText(product, 'ProductFormDescription') || getDirectText(product, 'ProductForm');
-        const epubDesc = getDirectText(product, 'EpubTypeDescription') || getDirectText(product, 'EpubType');
+        const recordRef = getDirectText(product, 'RecordReference') || `Record-#${index + 1}`;
+        const formDesc = getDirectText(product, 'ProductFormDescription') || getDirectText(product, 'ProductForm') || 'Digital/Book';
+        const epubDesc = getDirectText(product, 'EpubTypeDescription') || getDirectText(product, 'EpubType') || '';
         const title = getDirectText(product, 'Title > TitleText, TitleDetail > TitleText, TitleText, b203') || 'Untitled';
         
         // Series Information
         const titleOfSeries = getDirectText(product, 'Series > TitleOfSeries');
         const seriesNo = getDirectText(product, 'Series > NumberWithinSeries');
 
-        // Publication Date & Copyright Year
+        // Dates
         const pubDateRaw = getDirectText(product, 'PublicationDate');
         const pubDate = formatDate(pubDateRaw);
         const copyrightYear = getDirectText(product, 'CopyrightYear') || '-';
 
-        // Primary & Format-Specific ISBN Extraction
+        // Strict & Complete ISBN Discovery
         let primaryIsbn = "-";
-        let isbnEpub = "-";
-        let isbnPdf = "-";
-        let isbnHardcover = "-";
-        let isbnPaperback = "-";
-        let isbnAudiobook = "-";
-        let biblioId = "-";
-        let workId = getDirectText(product, 'WorkIdentifier > IDValue') || '-';
+        const allIsbnsFound = new Set();
 
-        // 1. Primary ISBN via ProductIdentifier tags
+        // Scan ProductIdentifiers
         product.querySelectorAll('ProductIdentifier').forEach(id => {
           const type = getDirectText(id, 'ProductIDType');
           const val = getDirectText(id, 'IDValue');
-          const typeName = getDirectText(id, 'IDTypeName');
-
-          if (type === '15' || type === '03') primaryIsbn = val;
-          if (type === '01' && typeName.toLowerCase().includes('biblio')) biblioId = val;
-        });
-
-        // Fallback for primary ISBN from RecordReference
-        if (primaryIsbn === "-" && recordRef) {
-          const match = recordRef.match(/\d{13}/);
-          if (match) primaryIsbn = match[0];
-        }
-
-        // 2. Classify Current Record Format ISBN
-        if (primaryIsbn !== "-") {
-          const combinedTypeStr = `${recordRef} ${formDesc} ${epubDesc}`.toLowerCase();
-          if (combinedTypeStr.includes('epub')) isbnEpub = primaryIsbn;
-          else if (combinedTypeStr.includes('pdf')) isbnPdf = primaryIsbn;
-          else if (combinedTypeStr.includes('hardcover') || combinedTypeStr.includes('hardback') || combinedTypeStr.includes('bb')) isbnHardcover = primaryIsbn;
-          else if (combinedTypeStr.includes('paperback') || combinedTypeStr.includes('softcover') || combinedTypeStr.includes('bc')) isbnPaperback = primaryIsbn;
-          else if (combinedTypeStr.includes('audio') || combinedTypeStr.includes('aj')) isbnAudiobook = primaryIsbn;
-        }
-
-        // 3. Classify Related Product ISBNs (<RelatedProduct>)
-        product.querySelectorAll('RelatedProduct').forEach(rel => {
-          const relIsbn = getDirectText(rel, 'ProductIdentifier > IDValue');
-          const relForm = getDirectText(rel, 'ProductFormDescription') || getDirectText(rel, 'ProductForm');
-
-          if (relIsbn) {
-            const relFormStr = relForm.toLowerCase();
-            if (relFormStr.includes('epub') && isbnEpub === "-") isbnEpub = relIsbn;
-            else if (relFormStr.includes('pdf') && isbnPdf === "-") isbnPdf = relIsbn;
-            else if ((relFormStr.includes('hard') || relFormStr.includes('bb')) && isbnHardcover === "-") isbnHardcover = relIsbn;
-            else if ((relFormStr.includes('paper') || relFormStr.includes('bc')) && isbnPaperback === "-") isbnPaperback = relIsbn;
-            else if ((relFormStr.includes('audio') || relFormStr.includes('aj')) && isbnAudiobook === "-") isbnAudiobook = relIsbn;
+          if (val) {
+            allIsbnsFound.add(val);
+            if ((type === '15' || type === '03') && primaryIsbn === "-") {
+              primaryIsbn = val;
+            }
           }
         });
+
+        // Scan RecordReference for 13-digit ISBNs starting with 978 or 979
+        if (recordRef) {
+          const match = recordRef.match(/(978|979)\d{10}/);
+          if (match) {
+            allIsbnsFound.add(match[0]);
+            if (primaryIsbn === "-") primaryIsbn = match[0];
+          }
+        }
+
+        // Scan RelatedProduct Identifiers
+        product.querySelectorAll('RelatedProduct ProductIdentifier IDValue').forEach(idNode => {
+          const val = idNode.textContent.trim();
+          if (val) allIsbnsFound.add(val);
+        });
+
+        if (primaryIsbn === "-" && allIsbnsFound.size > 0) {
+          primaryIsbn = Array.from(allIsbnsFound)[0];
+        }
+
+        const allIsbnsCommaSeparated = Array.from(allIsbnsFound).join(', ') || primaryIsbn;
 
         // Authors & Illustrators
         const authors = [];
@@ -227,7 +213,7 @@
           if (qualifier === '11') gradeRange = `Grade ${from} - ${to}`;
         });
 
-        // Full Territories
+        // Territories
         const rightsCountry = getDirectText(product, 'SalesRights > RightsCountry') || '-';
         const supplyToCountry = getDirectText(product, 'SupplyDetail > SupplyToCountry') || '-';
 
@@ -241,23 +227,17 @@
         const currency = getDirectText(product, 'SupplyDetail > Price > CurrencyCode') || getDirectText(product, 'Price > CurrencyCode');
         const fullPrice = (priceAmount && currency) ? `${currency} ${priceAmount}` : '-';
 
-        // Store Record Object for CSV Export
+        // Save for CSV Export
         parsedBooks.push({
           "Record Reference": recordRef,
-          "Primary ISBN-13": primaryIsbn,
-          "ISBN EPUB": isbnEpub,
-          "ISBN PDF": isbnPdf,
-          "ISBN Hardcover": isbnHardcover,
-          "ISBN Paperback": isbnPaperback,
-          "ISBN Audiobook": isbnAudiobook,
-          "Biblio ID": biblioId,
-          "Work ID": workId,
+          "Primary ISBN": primaryIsbn,
+          "All Extracted ISBNs": allIsbnsCommaSeparated,
           "Title": title,
           "Series Name": titleOfSeries || '-',
           "Series Number": seriesNo || '-',
           "Authors": authors.join(', ') || '-',
           "Illustrators": illustrators.join(', ') || '-',
-          "Format": `${formDesc} (${epubDesc})`,
+          "Format": `${formDesc} ${epubDesc ? '(' + epubDesc + ')' : ''}`.trim(),
           "BASIC Main Subject": basicMainSubject,
           "Fiction/Non-Fiction": fictionStatus,
           "All BISAC Codes": bisacCodes.join(' | ') || '-',
@@ -278,15 +258,6 @@
           "Price": fullPrice
         });
 
-        // Format-specific ISBN Badges for UI
-        const relatedIsbnBadges = [
-          isbnEpub !== '-' ? `<span class="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded border border-indigo-200">EPUB: <b>${isbnEpub}</b></span>` : '',
-          isbnPdf !== '-' ? `<span class="bg-red-50 text-red-700 px-2 py-0.5 rounded border border-red-200">PDF: <b>${isbnPdf}</b></span>` : '',
-          isbnHardcover !== '-' ? `<span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200">Hardcover: <b>${isbnHardcover}</b></span>` : '',
-          isbnPaperback !== '-' ? `<span class="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded border border-emerald-200">Paperback: <b>${isbnPaperback}</b></span>` : '',
-          isbnAudiobook !== '-' ? `<span class="bg-purple-50 text-purple-700 px-2 py-0.5 rounded border border-purple-200">Audiobook: <b>${isbnAudiobook}</b></span>` : ''
-        ].filter(Boolean).join(' ');
-
         // Render Card HTML
         const cardHTML = `
           <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col md:flex-row hover:shadow-md transition">
@@ -303,22 +274,20 @@
               <div>
                 <!-- Top Badges -->
                 <div class="flex flex-wrap items-center gap-2 mb-2">
-                  <span class="bg-indigo-600 text-white text-xs font-bold px-2.5 py-0.5 rounded">Primary ISBN: ${primaryIsbn}</span>
+                  <span class="bg-indigo-600 text-white text-xs font-bold px-2.5 py-0.5 rounded">ISBN: ${primaryIsbn}</span>
                   <span class="bg-slate-800 text-white text-xs font-semibold px-2 py-0.5 rounded">${fictionStatus}</span>
                   <span class="bg-slate-200 text-slate-700 text-xs font-semibold px-2 py-0.5 rounded">${formDesc}</span>
                   ${titleOfSeries ? `<span class="bg-purple-100 text-purple-800 text-xs font-semibold px-2 py-0.5 rounded">Series: ${titleOfSeries}${seriesNo ? ' (Vol. ' + seriesNo + ')' : ''}</span>` : ''}
+                  <span class="text-slate-400 text-[11px]">Ref: ${recordRef}</span>
                 </div>
 
-                <!-- Related Format ISBNs Row -->
-                ${relatedIsbnBadges ? `
-                  <div class="mt-2 text-xs flex flex-wrap items-center gap-1.5">
-                    <span class="text-slate-500 font-medium mr-1">Formats:</span>
-                    ${relatedIsbnBadges}
-                  </div>
-                ` : ''}
+                <!-- ISBN List Line -->
+                <div class="text-xs text-slate-500 font-medium mb-1">
+                  <b>All Found ISBNs:</b> ${allIsbnsCommaSeparated}
+                </div>
 
                 <!-- Title & Authors -->
-                <h2 class="text-2xl font-bold text-slate-900 leading-tight mt-2">${title}</h2>
+                <h2 class="text-2xl font-bold text-slate-900 leading-tight mt-1">${title}</h2>
                 <div class="mt-2 flex flex-wrap gap-2 text-xs">
                   ${authors.length > 0 ? authors.map(a => `<span class="bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded">✍️ Author: <b>${a}</b></span>`).join('') : ''}
                   ${illustrators.length > 0 ? illustrators.map(i => `<span class="bg-pink-50 text-pink-700 border border-pink-200 px-2 py-0.5 rounded">🎨 Illustrator: <b>${i}</b></span>`).join('') : ''}
