@@ -11,7 +11,7 @@
     <!-- Header -->
     <header class="mb-8 text-center">
       <h1 class="text-3xl font-extrabold text-slate-900">ONIX Metadata Inspector</h1>
-      <p class="text-slate-600 mt-2">Comprehensive parser & QA viewer with instant CSV export.</p>
+      <p class="text-slate-600 mt-2">Comprehensive parser & QA previewer with instant CSV export.</p>
     </header>
 
     <!-- Upload Box -->
@@ -23,7 +23,7 @@
       <p class="text-slate-400 text-sm mt-1">Supports ONIX 2.1 and ONIX 3.0 formats</p>
     </div>
 
-    <!-- Toolbar / Action Bar -->
+    <!-- Toolbar -->
     <div id="statsBar" class="mt-6 hidden flex flex-col md:flex-row justify-between items-center bg-indigo-900 text-white px-6 py-4 rounded-xl gap-4 shadow-sm">
       <div>
         <span id="publisherInfo" class="font-medium text-sm block md:inline"></span>
@@ -85,17 +85,15 @@
       recordCount.textContent = `${products.length} Product Records`;
 
       products.forEach(product => {
-        // Record Reference & Formats
+        // Basic Metadata
         const recordRef = getDirectText(product, 'RecordReference');
         const formDesc = getDirectText(product, 'ProductFormDescription') || getDirectText(product, 'ProductForm');
         const epubDesc = getDirectText(product, 'EpubTypeDescription') || getDirectText(product, 'EpubType');
-
-        // Titles & Series
         const title = getDirectText(product, 'Title > TitleText, TitleDetail > TitleText, TitleText, b203') || 'Untitled';
         const titleOfSeries = getDirectText(product, 'Series > TitleOfSeries');
         const seriesNo = getDirectText(product, 'Series > NumberWithinSeries');
 
-        // All ISBNs & Identifiers
+        // Identifiers
         let isbn13 = "N/A";
         const allIsbns = [];
         product.querySelectorAll('ProductIdentifier').forEach(id => {
@@ -106,82 +104,64 @@
           if (val) allIsbns.push(`${typeName ? typeName + ': ' : ''}${val}`);
         });
 
-        // Authors & Illustrators Separated
+        // Authors & Illustrators
         const authors = [];
         const illustrators = [];
-        const contributorsAll = [];
-
         product.querySelectorAll('Contributor').forEach(c => {
           const name = getDirectText(c, 'PersonName') || `${getDirectText(c, 'NamesBeforeKey')} ${getDirectText(c, 'KeyNames')}`.trim();
           const roleCode = getDirectText(c, 'ContributorRole');
-          
-          if (roleCode === 'A01') {
-            authors.push(name);
-            contributorsAll.push(`${name} (Author)`);
-          } else if (roleCode === 'A12') {
-            illustrators.push(name);
-            contributorsAll.push(`${name} (Illustrator)`);
-          } else {
-            contributorsAll.push(`${name} (${roleCode})`);
-          }
+          if (roleCode === 'A01') authors.push(name);
+          else if (roleCode === 'A12') illustrators.push(name);
         });
 
-        // Main Subject, All Subject Codes (BISACs), Keywords
+        // Subjects & Fiction/Non-Fiction
         const basicMainSubject = getDirectText(product, 'BASICMainSubject');
         const bisacCodes = [];
         let keywords = '';
 
-        // Fiction / Non-Fiction Detection
         let fictionStatus = 'Unknown';
-        if (basicMainSubject.startsWith('JNF') || basicMainSubject.startsWith('NON')) {
-          fictionStatus = 'Non-Fiction';
-        } else if (basicMainSubject.startsWith('JUV') || basicMainSubject.startsWith('FIC')) {
-          fictionStatus = 'Fiction';
-        }
+        if (basicMainSubject.startsWith('JNF') || basicMainSubject.startsWith('NON')) fictionStatus = 'Non-Fiction';
+        else if (basicMainSubject.startsWith('JUV') || basicMainSubject.startsWith('FIC')) fictionStatus = 'Fiction';
 
         product.querySelectorAll('Subject').forEach(s => {
           const scheme = getDirectText(s, 'SubjectSchemeIdentifier');
           const code = getDirectText(s, 'SubjectCode');
           const heading = getDirectText(s, 'SubjectHeadingText');
 
-          if (scheme === '10' || scheme === '24') { // BISAC Scheme
+          if (scheme === '10' || scheme === '24') {
             if (heading) bisacCodes.push(`${code ? '[' + code + '] ' : ''}${heading}`);
-          } else if (scheme === '20') { // Keywords Scheme
+          } else if (scheme === '20') {
             keywords = heading;
           }
         });
 
-        // Descriptions
-        let shortDescription = '';
-        let longDescription = '';
+        // Parse BOTH Descriptions Separately
+        let mainDescription = '';   // TextTypeCode 01
+        let seriesDescription = ''; // TextTypeCode 17
         product.querySelectorAll('OtherText').forEach(ot => {
           const type = getDirectText(ot, 'TextTypeCode');
           const txt = getDirectText(ot, 'Text');
-          if (type === '01') longDescription = txt;
-          if (type === '02' || type === '17') shortDescription = txt;
+          if (type === '01') mainDescription = txt;
+          if (type === '17') seriesDescription = txt;
         });
-        if (!shortDescription) shortDescription = longDescription;
 
-        // Age Limit & Grade Range
+        // Audience Ranges
         let ageLimit = '';
         let gradeRange = '';
         product.querySelectorAll('AudienceRange').forEach(ar => {
           const qualifier = getDirectText(ar, 'AudienceRangeQualifier');
-          const precisions = ar.querySelectorAll('AudienceRangePrecision');
           const values = ar.querySelectorAll('AudienceRangeValue');
-          
           let from = values[0] ? values[0].textContent.trim() : '';
           let to = values[1] ? values[1].textContent.trim() : '';
-
           if (qualifier === '17') ageLimit = `${from} - ${to} Years`;
           if (qualifier === '11') gradeRange = `Grade ${from} - ${to}`;
         });
 
-        // Rights & Supply Territories
+        // Sales & Supply Territories
         const rightsCountry = getDirectText(product, 'SalesRights > RightsCountry');
         const supplyToCountry = getDirectText(product, 'SupplyDetail > SupplyToCountry');
 
-        // Publisher, Imprint & Image
+        // Publisher Details & Image
         const publisher = getDirectText(product, 'Publisher > PublisherName');
         const imprint = getDirectText(product, 'Imprint > ImprintName');
         const imageLink = getDirectText(product, 'MediaFile > MediaFileLink');
@@ -190,8 +170,8 @@
         const priceAmount = getDirectText(product, 'SupplyDetail > Price > PriceAmount') || getDirectText(product, 'Price > PriceAmount');
         const currency = getDirectText(product, 'SupplyDetail > Price > CurrencyCode') || getDirectText(product, 'Price > CurrencyCode');
 
-        // Save Record Object for CSV Export
-        const bookData = {
+        // Store Record for CSV Export
+        parsedBooks.push({
           "Record Reference": recordRef,
           "ISBN-13": isbn13,
           "All Identifiers": allIsbns.join(' | '),
@@ -207,20 +187,19 @@
           "Age Limit": ageLimit,
           "Grade Range": gradeRange,
           "Keywords": keywords,
-          "Short Description": shortDescription,
-          "Long Description": longDescription,
+          "Main Description (Type 01)": mainDescription,
+          "Series Description (Type 17)": seriesDescription,
           "Rights Countries": rightsCountry,
           "Supply To Countries": supplyToCountry,
           "Publisher": publisher,
           "Imprint": imprint,
           "Price": `${currency} ${priceAmount}`
-        };
-        parsedBooks.push(bookData);
+        });
 
-        // Render Cards
+        // Render Book Card HTML
         const cardHTML = `
           <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col md:flex-row hover:shadow-md transition">
-            <!-- Cover -->
+            <!-- Cover Box -->
             <div class="w-full md:w-52 bg-slate-100 p-4 flex items-center justify-center shrink-0 border-b md:border-b-0 md:border-r border-slate-200">
               ${imageLink ? 
                 `<img src="${imageLink}" alt="Cover image" class="max-h-60 object-contain rounded shadow-sm" loading="lazy" onerror="this.onerror=null; this.src='https://via.placeholder.com/150x200?text=No+Cover';">` : 
@@ -228,10 +207,10 @@
               }
             </div>
 
-            <!-- Content -->
+            <!-- Content Area -->
             <div class="p-6 flex-1 flex flex-col justify-between">
               <div>
-                <!-- Top Tags -->
+                <!-- Header Badges -->
                 <div class="flex flex-wrap items-center gap-2 mb-2">
                   <span class="bg-indigo-600 text-white text-xs font-bold px-2.5 py-0.5 rounded">ISBN: ${isbn13}</span>
                   <span class="bg-slate-800 text-white text-xs font-semibold px-2 py-0.5 rounded">${fictionStatus}</span>
@@ -253,20 +232,32 @@
                   ${bisacCodes.map(b => `<span class="inline-block bg-slate-100 text-slate-700 text-[11px] px-2 py-0.5 rounded mr-1 mt-1">${b}</span>`).join('')}
                 </div>
 
-                <!-- Audience / Age / Grade -->
+                <!-- Audience Ranges -->
                 <div class="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-slate-600">
                   ${ageLimit ? `<span class="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded">🎯 Age: ${ageLimit}</span>` : ''}
                   ${gradeRange ? `<span class="bg-teal-50 text-teal-700 border border-teal-200 px-2 py-0.5 rounded">🏫 Grade: ${gradeRange}</span>` : ''}
                 </div>
 
-                <!-- Description -->
-                ${shortDescription ? `<p class="text-slate-600 text-xs mt-3 bg-slate-50 p-3 rounded border border-slate-100 leading-relaxed">${shortDescription}</p>` : ''}
+                <!-- Displays Both Descriptions -->
+                ${mainDescription ? `
+                  <div class="mt-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                    <span class="text-[11px] font-bold text-indigo-700 uppercase tracking-wider block mb-1">📖 Main Description (Type 01)</span>
+                    <p class="text-slate-700 text-xs leading-relaxed">${mainDescription}</p>
+                  </div>
+                ` : ''}
+
+                ${seriesDescription ? `
+                  <div class="mt-2 bg-purple-50 p-3 rounded-lg border border-purple-200">
+                    <span class="text-[11px] font-bold text-purple-700 uppercase tracking-wider block mb-1">📚 Series Description (Type 17)</span>
+                    <p class="text-slate-700 text-xs leading-relaxed">${seriesDescription}</p>
+                  </div>
+                ` : ''}
 
                 <!-- Keywords -->
                 ${keywords ? `<div class="mt-3 text-[11px] text-slate-500"><b>Keywords:</b> ${keywords}</div>` : ''}
               </div>
 
-              <!-- Bottom Details Footer -->
+              <!-- Footer Details -->
               <div class="mt-6 pt-4 border-t border-slate-100 flex flex-wrap justify-between items-end gap-4 text-xs">
                 <div class="space-y-1">
                   <p><b class="text-slate-700">Publisher / Imprint:</b> ${publisher} ${imprint ? '(' + imprint + ')' : ''}</p>
@@ -292,20 +283,17 @@
       const headers = Object.keys(parsedBooks[0]);
       const csvRows = [];
 
-      // Add Headers
       csvRows.push(headers.map(h => `"${h}"`).join(','));
 
-      // Add Data Rows
       parsedBooks.forEach(book => {
         const row = headers.map(header => {
           let val = book[header] || '';
-          val = val.toString().replace(/"/g, '""'); // Escape Quotes
+          val = val.toString().replace(/"/g, '""');
           return `"${val}"`;
         });
         csvRows.push(row.join(','));
       });
 
-      // Create Blob & Download Link
       const csvString = csvRows.join('\n');
       const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
