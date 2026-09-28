@@ -23,7 +23,7 @@
       <p class="text-slate-400 text-sm mt-1">Supports ONIX 2.1 and ONIX 3.0 formats</p>
     </div>
 
-    <!-- Toolbar -->
+    <!-- Action Bar / Toolbar -->
     <div id="statsBar" class="mt-6 hidden flex flex-col md:flex-row justify-between items-center bg-indigo-900 text-white px-6 py-4 rounded-xl gap-4 shadow-sm">
       <div>
         <span id="publisherInfo" class="font-medium text-sm block md:inline"></span>
@@ -58,6 +58,11 @@
       return target ? target.textContent.trim() : '';
     }
 
+    function formatDate(rawDate) {
+      if (!rawDate || rawDate.length !== 8) return rawDate || 'N/A';
+      return `${rawDate.substring(0,4)}-${rawDate.substring(4,6)}-${rawDate.substring(6,8)}`;
+    }
+
     function parseONIX(xmlText) {
       const parser = new DOMParser();
       const xmlDoc = parser.parseFromString(xmlText, "text/xml");
@@ -71,7 +76,7 @@
 
       // Extract Header Info
       const sender = getDirectText(xmlDoc, 'Header > FromCompany') || 'Publisher Feed';
-      const sentDate = getDirectText(xmlDoc, 'Header > SentDate');
+      const sentDate = formatDate(getDirectText(xmlDoc, 'Header > SentDate'));
       publisherInfo.textContent = `Source: ${sender} ${sentDate ? '• Sent Date: ' + sentDate : ''}`;
 
       const products = xmlDoc.querySelectorAll('Product, product');
@@ -90,18 +95,40 @@
         const formDesc = getDirectText(product, 'ProductFormDescription') || getDirectText(product, 'ProductForm');
         const epubDesc = getDirectText(product, 'EpubTypeDescription') || getDirectText(product, 'EpubType');
         const title = getDirectText(product, 'Title > TitleText, TitleDetail > TitleText, TitleText, b203') || 'Untitled';
+        
+        // Separated Series Name & Series Number
         const titleOfSeries = getDirectText(product, 'Series > TitleOfSeries');
         const seriesNo = getDirectText(product, 'Series > NumberWithinSeries');
 
-        // Identifiers
+        // Publication Date & Copyright Year
+        const pubDateRaw = getDirectText(product, 'PublicationDate');
+        const pubDate = formatDate(pubDateRaw);
+        const copyrightYear = getDirectText(product, 'CopyrightYear');
+
+        // Detailed Identifiers Breakdown
         let isbn13 = "N/A";
+        let isbnEpub = "N/A";
+        let isbnPdf = "N/A";
+        let isbnHardcover = "N/A";
+        let isbnPaperback = "N/A";
+        let isbnAudiobook = "N/A";
+        let biblioId = "N/A";
+        let workId = getDirectText(product, 'WorkIdentifier > IDValue');
         const allIsbns = [];
+
         product.querySelectorAll('ProductIdentifier').forEach(id => {
           const type = getDirectText(id, 'ProductIDType');
           const val = getDirectText(id, 'IDValue');
           const typeName = getDirectText(id, 'IDTypeName');
+
           if (type === '15') isbn13 = val;
-          if (val) allIsbns.push(`${typeName ? typeName + ': ' : ''}${val}`);
+          if (type === '01' && typeName.toLowerCase().includes('biblio')) biblioId = val;
+
+          // Detect Format Specific ISBNs by RecordReference prefix or ProductForm
+          if (recordRef.toLowerCase().includes('epub')) isbnEpub = val;
+          else if (recordRef.toLowerCase().includes('pdf')) isbnPdf = val;
+
+          if (val) allIsbns.push(`${typeName ? typeName + ': ' : 'Type ' + type + ': '}${val}`);
         });
 
         // Authors & Illustrators
@@ -135,7 +162,29 @@
           }
         });
 
-        // Parse BOTH Descriptions Separately
+        // Reading / Complexity Levels Explicit Mapping
+        let lexileCode = 'N/A';
+        let guidedReadingLevel = 'N/A';
+        let acceleratedReaderLevel = 'N/A';
+        const complexitiesDisplay = [];
+
+        product.querySelectorAll('Complexity').forEach(comp => {
+          const scheme = getDirectText(comp, 'ComplexitySchemeIdentifier');
+          const code = getDirectText(comp, 'ComplexityCode');
+
+          if (scheme === '06') {
+            lexileCode = code;
+            complexitiesDisplay.push(`<span class="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded border border-indigo-200">📊 Lexile: <b>${code}</b></span>`);
+          } else if (scheme === '02') {
+            guidedReadingLevel = code;
+            complexitiesDisplay.push(`<span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200">📖 Guided Reading: <b>${code}</b></span>`);
+          } else if (scheme === '07') {
+            acceleratedReaderLevel = code;
+            complexitiesDisplay.push(`<span class="bg-amber-50 text-amber-700 px-2 py-0.5 rounded border border-amber-200">⭐ Accelerated Reader: <b>${code}</b></span>`);
+          }
+        });
+
+        // Descriptions
         let mainDescription = '';   // TextTypeCode 01
         let seriesDescription = ''; // TextTypeCode 17
         product.querySelectorAll('OtherText').forEach(ot => {
@@ -157,11 +206,11 @@
           if (qualifier === '11') gradeRange = `Grade ${from} - ${to}`;
         });
 
-        // Sales & Supply Territories
+        // FULL Un-truncated Territories
         const rightsCountry = getDirectText(product, 'SalesRights > RightsCountry');
         const supplyToCountry = getDirectText(product, 'SupplyDetail > SupplyToCountry');
 
-        // Publisher Details & Image
+        // Publisher Details & Cover
         const publisher = getDirectText(product, 'Publisher > PublisherName');
         const imprint = getDirectText(product, 'Imprint > ImprintName');
         const imageLink = getDirectText(product, 'MediaFile > MediaFileLink');
@@ -170,36 +219,48 @@
         const priceAmount = getDirectText(product, 'SupplyDetail > Price > PriceAmount') || getDirectText(product, 'Price > PriceAmount');
         const currency = getDirectText(product, 'SupplyDetail > Price > CurrencyCode') || getDirectText(product, 'Price > CurrencyCode');
 
-        // Store Record for CSV Export
+        // Store Record Object for CSV Export
         parsedBooks.push({
           "Record Reference": recordRef,
           "ISBN-13": isbn13,
+          "ISBN EPUB": isbnEpub,
+          "ISBN PDF": isbnPdf,
+          "ISBN Hardcover": isbnHardcover,
+          "ISBN Paperback": isbnPaperback,
+          "ISBN Audiobook": isbnAudiobook,
+          "Biblio ID": biblioId,
+          "Work ID": workId,
           "All Identifiers": allIsbns.join(' | '),
           "Title": title,
-          "Series Title": titleOfSeries,
-          "Series No": seriesNo,
+          "Series Name": titleOfSeries,
+          "Series Number": seriesNo || 'N/A',
           "Authors": authors.join(', '),
           "Illustrators": illustrators.join(', '),
           "Format": `${formDesc} (${epubDesc})`,
           "BASIC Main Subject": basicMainSubject,
           "Fiction/Non-Fiction": fictionStatus,
           "All BISAC Codes": bisacCodes.join(' | '),
+          "Lexile Code": lexileCode,
+          "Guided Reading Level": guidedReadingLevel,
+          "Accelerated Reader Level": acceleratedReaderLevel,
           "Age Limit": ageLimit,
           "Grade Range": gradeRange,
+          "Publication Date": pubDate,
+          "Copyright Year": copyrightYear,
           "Keywords": keywords,
           "Main Description (Type 01)": mainDescription,
           "Series Description (Type 17)": seriesDescription,
-          "Rights Countries": rightsCountry,
-          "Supply To Countries": supplyToCountry,
+          "Rights Countries (Full)": rightsCountry,
+          "Supply To Countries (Full)": supplyToCountry,
           "Publisher": publisher,
           "Imprint": imprint,
           "Price": `${currency} ${priceAmount}`
         });
 
-        // Render Book Card HTML
+        // Render Card HTML
         const cardHTML = `
           <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col md:flex-row hover:shadow-md transition">
-            <!-- Cover Box -->
+            <!-- Cover -->
             <div class="w-full md:w-52 bg-slate-100 p-4 flex items-center justify-center shrink-0 border-b md:border-b-0 md:border-r border-slate-200">
               ${imageLink ? 
                 `<img src="${imageLink}" alt="Cover image" class="max-h-60 object-contain rounded shadow-sm" loading="lazy" onerror="this.onerror=null; this.src='https://via.placeholder.com/150x200?text=No+Cover';">` : 
@@ -210,12 +271,12 @@
             <!-- Content Area -->
             <div class="p-6 flex-1 flex flex-col justify-between">
               <div>
-                <!-- Header Badges -->
+                <!-- Top Badges -->
                 <div class="flex flex-wrap items-center gap-2 mb-2">
                   <span class="bg-indigo-600 text-white text-xs font-bold px-2.5 py-0.5 rounded">ISBN: ${isbn13}</span>
                   <span class="bg-slate-800 text-white text-xs font-semibold px-2 py-0.5 rounded">${fictionStatus}</span>
                   <span class="bg-slate-200 text-slate-700 text-xs font-semibold px-2 py-0.5 rounded">${formDesc}</span>
-                  ${titleOfSeries ? `<span class="bg-purple-100 text-purple-800 text-xs font-semibold px-2 py-0.5 rounded">Series: ${titleOfSeries}${seriesNo ? '#' + seriesNo : ''}</span>` : ''}
+                  ${titleOfSeries ? `<span class="bg-purple-100 text-purple-800 text-xs font-semibold px-2 py-0.5 rounded">Series: ${titleOfSeries}${seriesNo ? ' (Vol. ' + seriesNo + ')' : ''}</span>` : ''}
                 </div>
 
                 <!-- Title & Authors -->
@@ -225,6 +286,13 @@
                   ${illustrators.map(i => `<span class="bg-pink-50 text-pink-700 border border-pink-200 px-2 py-0.5 rounded">🎨 Illustrator: <b>${i}</b></span>`).join('')}
                 </div>
 
+                <!-- Reading Levels Row -->
+                ${complexitiesDisplay.length > 0 ? `
+                  <div class="mt-3 flex flex-wrap gap-2 text-xs">
+                    ${complexitiesDisplay.join('')}
+                  </div>
+                ` : ''}
+
                 <!-- BISAC Subjects -->
                 <div class="mt-3">
                   <span class="text-xs font-semibold text-slate-500 mr-2">BISAC/Subjects:</span>
@@ -232,13 +300,15 @@
                   ${bisacCodes.map(b => `<span class="inline-block bg-slate-100 text-slate-700 text-[11px] px-2 py-0.5 rounded mr-1 mt-1">${b}</span>`).join('')}
                 </div>
 
-                <!-- Audience Ranges -->
+                <!-- Age / Grade / Pub Date / Copyright -->
                 <div class="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-slate-600">
                   ${ageLimit ? `<span class="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded">🎯 Age: ${ageLimit}</span>` : ''}
                   ${gradeRange ? `<span class="bg-teal-50 text-teal-700 border border-teal-200 px-2 py-0.5 rounded">🏫 Grade: ${gradeRange}</span>` : ''}
+                  <span class="bg-slate-100 text-slate-700 px-2 py-0.5 rounded">📅 Pub Date: ${pubDate}</span>
+                  ${copyrightYear ? `<span class="bg-slate-100 text-slate-700 px-2 py-0.5 rounded">©️ Copyright: ${copyrightYear}</span>` : ''}
                 </div>
 
-                <!-- Displays Both Descriptions -->
+                <!-- Descriptions -->
                 ${mainDescription ? `
                   <div class="mt-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
                     <span class="text-[11px] font-bold text-indigo-700 uppercase tracking-wider block mb-1">📖 Main Description (Type 01)</span>
@@ -257,15 +327,15 @@
                 ${keywords ? `<div class="mt-3 text-[11px] text-slate-500"><b>Keywords:</b> ${keywords}</div>` : ''}
               </div>
 
-              <!-- Footer Details -->
+              <!-- Footer Details with FULL Territory lists -->
               <div class="mt-6 pt-4 border-t border-slate-100 flex flex-wrap justify-between items-end gap-4 text-xs">
-                <div class="space-y-1">
+                <div class="space-y-1 max-w-2xl">
                   <p><b class="text-slate-700">Publisher / Imprint:</b> ${publisher} ${imprint ? '(' + imprint + ')' : ''}</p>
                   <p><b class="text-slate-700">Rights Territory:</b> ${rightsCountry || 'Global'}</p>
-                  <p><b class="text-slate-700">Supply Territory:</b> ${supplyToCountry ? supplyToCountry.substring(0, 40) + '...' : 'Global'}</p>
+                  <p class="break-words"><b class="text-slate-700">Supply Territory (Full):</b> ${supplyToCountry || 'Global'}</p>
                 </div>
 
-                <div class="text-right">
+                <div class="text-right shrink-0">
                   <div class="text-xl font-black text-slate-900">${currency} ${priceAmount || 'N/A'}</div>
                 </div>
               </div>
