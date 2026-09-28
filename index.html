@@ -105,30 +105,36 @@
         const pubDate = formatDate(pubDateRaw);
         const copyrightYear = getDirectText(product, 'CopyrightYear') || '-';
 
-        // Identifiers
-        let isbn13 = "-";
-        let isbnEpub = "-";
-        let isbnPdf = "-";
-        let isbnHardcover = "-";
-        let isbnPaperback = "-";
-        let isbnAudiobook = "-";
-        let biblioId = "-";
-        let workId = getDirectText(product, 'WorkIdentifier > IDValue') || '-';
-        const allIsbns = [];
+        // Advanced Multi-ISBN Extraction
+        let primaryIsbn = "-";
+        const isbnsSet = new Set();
 
+        // 1. Check ProductIdentifier tags
         product.querySelectorAll('ProductIdentifier').forEach(id => {
           const type = getDirectText(id, 'ProductIDType');
           const val = getDirectText(id, 'IDValue');
-          const typeName = getDirectText(id, 'IDTypeName');
-
-          if (type === '15') isbn13 = val;
-          if (type === '01' && typeName.toLowerCase().includes('biblio')) biblioId = val;
-
-          if (recordRef.toLowerCase().includes('epub')) isbnEpub = val;
-          else if (recordRef.toLowerCase().includes('pdf')) isbnPdf = val;
-
-          if (val) allIsbns.push(`${typeName ? typeName + ': ' : 'Type ' + type + ': '}${val}`);
+          if (val) {
+            if (type === '15') primaryIsbn = val;
+            if (/^\d{13}$/.test(val)) isbnsSet.add(val);
+          }
         });
+
+        // 2. Extract ISBN from RecordReference fallback (e.g. "ePub.9798898802035")
+        if (recordRef) {
+          const match = recordRef.match(/\d{13}/);
+          if (match) {
+            isbnsSet.add(match[0]);
+            if (primaryIsbn === "-") primaryIsbn = match[0];
+          }
+        }
+
+        // 3. Extract Related Product ISBNs (<RelatedProduct>)
+        product.querySelectorAll('RelatedProduct > ProductIdentifier > IDValue').forEach(idNode => {
+          const val = idNode.textContent.trim();
+          if (/^\d{13}$/.test(val)) isbnsSet.add(val);
+        });
+
+        const allIsbnsCommaSeparated = Array.from(isbnsSet).join(', ') || primaryIsbn;
 
         // Authors & Illustrators
         const authors = [];
@@ -173,7 +179,6 @@
           if (scheme === '06') {
             lexileCode = code || '-';
           } else if (scheme === '02') {
-            // Check if Guided Reading level is an A-Z letter, otherwise default to '-'
             guidedReadingLevel = (/^[A-Za-z]+$/).test(code) ? code.toUpperCase() : '-';
           } else if (scheme === '07') {
             acceleratedReaderLevel = code || '-';
@@ -219,15 +224,8 @@
         // Store Record Object for CSV Export
         parsedBooks.push({
           "Record Reference": recordRef,
-          "ISBN-13": isbn13,
-          "ISBN EPUB": isbnEpub,
-          "ISBN PDF": isbnPdf,
-          "ISBN Hardcover": isbnHardcover,
-          "ISBN Paperback": isbnPaperback,
-          "ISBN Audiobook": isbnAudiobook,
-          "Biblio ID": biblioId,
-          "Work ID": workId,
-          "All Identifiers": allIsbns.join(' | ') || '-',
+          "Primary ISBN-13": primaryIsbn,
+          "All Related ISBNs": allIsbnsCommaSeparated,
           "Title": title,
           "Series Name": titleOfSeries || '-',
           "Series Number": seriesNo || '-',
@@ -270,10 +268,15 @@
               <div>
                 <!-- Top Badges -->
                 <div class="flex flex-wrap items-center gap-2 mb-2">
-                  <span class="bg-indigo-600 text-white text-xs font-bold px-2.5 py-0.5 rounded">ISBN: ${isbn13}</span>
+                  <span class="bg-indigo-600 text-white text-xs font-bold px-2.5 py-0.5 rounded">ISBN: ${primaryIsbn}</span>
                   <span class="bg-slate-800 text-white text-xs font-semibold px-2 py-0.5 rounded">${fictionStatus}</span>
                   <span class="bg-slate-200 text-slate-700 text-xs font-semibold px-2 py-0.5 rounded">${formDesc}</span>
                   ${titleOfSeries ? `<span class="bg-purple-100 text-purple-800 text-xs font-semibold px-2 py-0.5 rounded">Series: ${titleOfSeries}${seriesNo ? ' (Vol. ' + seriesNo + ')' : ''}</span>` : ''}
+                </div>
+
+                <!-- Related ISBNs Display -->
+                <div class="text-xs text-slate-500 font-medium mb-1">
+                  <b>All Linked ISBNs:</b> ${allIsbnsCommaSeparated}
                 </div>
 
                 <!-- Title & Authors -->
