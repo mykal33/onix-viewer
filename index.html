@@ -3,15 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Complete ONIX 2.1 & 3.0 Metadata Viewer</title>
+  <title>ONIX Metadata Inspector & CSV Exporter</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-50 text-slate-800 p-4 md:p-8">
-  <div class="max-w-6xl mx-auto">
+  <div class="max-w-7xl mx-auto">
     <!-- Header -->
     <header class="mb-8 text-center">
       <h1 class="text-3xl font-extrabold text-slate-900">ONIX Metadata Inspector</h1>
-      <p class="text-slate-600 mt-2">Comprehensive visual parser for publisher ONIX feeds.</p>
+      <p class="text-slate-600 mt-2">Comprehensive parser & QA viewer with instant CSV export.</p>
     </header>
 
     <!-- Upload Box -->
@@ -23,10 +23,15 @@
       <p class="text-slate-400 text-sm mt-1">Supports ONIX 2.1 and ONIX 3.0 formats</p>
     </div>
 
-    <!-- Stats Bar -->
-    <div id="stats" class="mt-6 hidden flex justify-between items-center bg-indigo-900 text-white px-6 py-3 rounded-lg shadow-sm">
-      <span id="publisherInfo" class="font-medium text-sm"></span>
-      <span id="recordCount" class="font-bold text-sm bg-indigo-700 px-3 py-1 rounded-full"></span>
+    <!-- Toolbar / Action Bar -->
+    <div id="statsBar" class="mt-6 hidden flex flex-col md:flex-row justify-between items-center bg-indigo-900 text-white px-6 py-4 rounded-xl gap-4 shadow-sm">
+      <div>
+        <span id="publisherInfo" class="font-medium text-sm block md:inline"></span>
+        <span id="recordCount" class="font-bold text-xs bg-indigo-700 px-3 py-1 rounded-full ml-0 md:ml-2 mt-2 md:mt-0 inline-block"></span>
+      </div>
+      <button onclick="exportToCSV()" class="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-sm px-5 py-2.5 rounded-lg shadow transition flex items-center gap-2">
+        📥 Export All Data to CSV
+      </button>
     </div>
 
     <!-- Catalog Container -->
@@ -34,6 +39,8 @@
   </div>
 
   <script>
+    let parsedBooks = [];
+
     function handleFile(event) {
       const file = event.target.files[0];
       if (!file) return;
@@ -55,13 +62,14 @@
       const parser = new DOMParser();
       const xmlDoc = parser.parseFromString(xmlText, "text/xml");
       const catalog = document.getElementById('catalog');
-      const stats = document.getElementById('stats');
+      const statsBar = document.getElementById('statsBar');
       const publisherInfo = document.getElementById('publisherInfo');
       const recordCount = document.getElementById('recordCount');
 
       catalog.innerHTML = '';
+      parsedBooks = [];
 
-      // Extract Publisher Header Info
+      // Extract Header Info
       const sender = getDirectText(xmlDoc, 'Header > FromCompany') || 'Publisher Feed';
       const sentDate = getDirectText(xmlDoc, 'Header > SentDate');
       publisherInfo.textContent = `Source: ${sender} ${sentDate ? '• Sent Date: ' + sentDate : ''}`;
@@ -73,139 +81,240 @@
         return;
       }
 
-      stats.classList.remove('hidden');
-      recordCount.textContent = `${products.length} Products Found`;
+      statsBar.classList.remove('hidden');
+      recordCount.textContent = `${products.length} Product Records`;
 
       products.forEach(product => {
-        // Basic Info
+        // Record Reference & Formats
+        const recordRef = getDirectText(product, 'RecordReference');
+        const formDesc = getDirectText(product, 'ProductFormDescription') || getDirectText(product, 'ProductForm');
+        const epubDesc = getDirectText(product, 'EpubTypeDescription') || getDirectText(product, 'EpubType');
+
+        // Titles & Series
         const title = getDirectText(product, 'Title > TitleText, TitleDetail > TitleText, TitleText, b203') || 'Untitled';
-        const subtitle = getDirectText(product, 'Title > TitleSubTitle');
-        const series = getDirectText(product, 'Series > TitleOfSeries');
-        const format = getDirectText(product, 'ProductFormDescription') || getDirectText(product, 'ProductForm') || 'Book';
-        const pubStatus = getDirectText(product, 'PublishingStatus');
-        
-        // ISBN & Identifiers
+        const titleOfSeries = getDirectText(product, 'Series > TitleOfSeries');
+        const seriesNo = getDirectText(product, 'Series > NumberWithinSeries');
+
+        // All ISBNs & Identifiers
         let isbn13 = "N/A";
-        let biblioId = getDirectText(product, 'RecordReference');
-        
+        const allIsbns = [];
         product.querySelectorAll('ProductIdentifier').forEach(id => {
           const type = getDirectText(id, 'ProductIDType');
-          if (type === '15') isbn13 = getDirectText(id, 'IDValue');
+          const val = getDirectText(id, 'IDValue');
+          const typeName = getDirectText(id, 'IDTypeName');
+          if (type === '15') isbn13 = val;
+          if (val) allIsbns.push(`${typeName ? typeName + ': ' : ''}${val}`);
         });
 
-        // Contributors (Authors/Illustrators)
-        const contributors = Array.from(product.querySelectorAll('Contributor')).map(c => {
-          const name = getDirectText(c, 'PersonName') || getDirectText(c, 'KeyNames');
-          const roleCode = getDirectText(c, 'ContributorRole');
-          const role = roleCode === 'A01' ? 'Author' : roleCode === 'A12' ? 'Illustrator' : 'Contributor';
-          return `<span class="inline-block bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-xs mr-1">${name} <i>(${role})</i></span>`;
-        }).join('');
+        // Authors & Illustrators Separated
+        const authors = [];
+        const illustrators = [];
+        const contributorsAll = [];
 
-        // Description / Annotation
-        let description = '';
-        product.querySelectorAll('OtherText').forEach(ot => {
-          const type = getDirectText(ot, 'TextTypeCode');
-          if (type === '01' || type === '02') {
-            description = getDirectText(ot, 'Text');
+        product.querySelectorAll('Contributor').forEach(c => {
+          const name = getDirectText(c, 'PersonName') || `${getDirectText(c, 'NamesBeforeKey')} ${getDirectText(c, 'KeyNames')}`.trim();
+          const roleCode = getDirectText(c, 'ContributorRole');
+          
+          if (roleCode === 'A01') {
+            authors.push(name);
+            contributorsAll.push(`${name} (Author)`);
+          } else if (roleCode === 'A12') {
+            illustrators.push(name);
+            contributorsAll.push(`${name} (Illustrator)`);
+          } else {
+            contributorsAll.push(`${name} (${roleCode})`);
           }
         });
 
-        // Cover Image URL
-        const imageLink = getDirectText(product, 'MediaFile > MediaFileLink') || getDirectText(product, 'SupportingResource > ResourceVersion > ResourceLink');
+        // Main Subject, All Subject Codes (BISACs), Keywords
+        const basicMainSubject = getDirectText(product, 'BASICMainSubject');
+        const bisacCodes = [];
+        let keywords = '';
 
-        // Page Count / Extent
-        const extentVal = getDirectText(product, 'Extent > ExtentValue');
-        const extentUnit = getDirectText(product, 'Extent > ExtentUnit') === '03' ? 'pages' : '';
+        // Fiction / Non-Fiction Detection
+        let fictionStatus = 'Unknown';
+        if (basicMainSubject.startsWith('JNF') || basicMainSubject.startsWith('NON')) {
+          fictionStatus = 'Non-Fiction';
+        } else if (basicMainSubject.startsWith('JUV') || basicMainSubject.startsWith('FIC')) {
+          fictionStatus = 'Fiction';
+        }
 
-        // Publisher / Imprint
+        product.querySelectorAll('Subject').forEach(s => {
+          const scheme = getDirectText(s, 'SubjectSchemeIdentifier');
+          const code = getDirectText(s, 'SubjectCode');
+          const heading = getDirectText(s, 'SubjectHeadingText');
+
+          if (scheme === '10' || scheme === '24') { // BISAC Scheme
+            if (heading) bisacCodes.push(`${code ? '[' + code + '] ' : ''}${heading}`);
+          } else if (scheme === '20') { // Keywords Scheme
+            keywords = heading;
+          }
+        });
+
+        // Descriptions
+        let shortDescription = '';
+        let longDescription = '';
+        product.querySelectorAll('OtherText').forEach(ot => {
+          const type = getDirectText(ot, 'TextTypeCode');
+          const txt = getDirectText(ot, 'Text');
+          if (type === '01') longDescription = txt;
+          if (type === '02' || type === '17') shortDescription = txt;
+        });
+        if (!shortDescription) shortDescription = longDescription;
+
+        // Age Limit & Grade Range
+        let ageLimit = '';
+        let gradeRange = '';
+        product.querySelectorAll('AudienceRange').forEach(ar => {
+          const qualifier = getDirectText(ar, 'AudienceRangeQualifier');
+          const precisions = ar.querySelectorAll('AudienceRangePrecision');
+          const values = ar.querySelectorAll('AudienceRangeValue');
+          
+          let from = values[0] ? values[0].textContent.trim() : '';
+          let to = values[1] ? values[1].textContent.trim() : '';
+
+          if (qualifier === '17') ageLimit = `${from} - ${to} Years`;
+          if (qualifier === '11') gradeRange = `Grade ${from} - ${to}`;
+        });
+
+        // Rights & Supply Territories
+        const rightsCountry = getDirectText(product, 'SalesRights > RightsCountry');
+        const supplyToCountry = getDirectText(product, 'SupplyDetail > SupplyToCountry');
+
+        // Publisher, Imprint & Image
         const publisher = getDirectText(product, 'Publisher > PublisherName');
         const imprint = getDirectText(product, 'Imprint > ImprintName');
-        const pubDate = getDirectText(product, 'PublicationDate');
+        const imageLink = getDirectText(product, 'MediaFile > MediaFileLink');
 
         // Price
         const priceAmount = getDirectText(product, 'SupplyDetail > Price > PriceAmount') || getDirectText(product, 'Price > PriceAmount');
         const currency = getDirectText(product, 'SupplyDetail > Price > CurrencyCode') || getDirectText(product, 'Price > CurrencyCode');
-        const priceType = getDirectText(product, 'SupplyDetail > Price > PriceTypeDescription');
 
-        // Subjects / BISAC
-        const subjects = Array.from(product.querySelectorAll('Subject')).map(s => {
-          const heading = getDirectText(s, 'SubjectHeadingText');
-          return heading ? `<span class="inline-block bg-amber-50 text-amber-800 border border-amber-200 text-xs px-2 py-1 rounded mr-1 mb-1">${heading}</span>` : '';
-        }).join('');
+        // Save Record Object for CSV Export
+        const bookData = {
+          "Record Reference": recordRef,
+          "ISBN-13": isbn13,
+          "All Identifiers": allIsbns.join(' | '),
+          "Title": title,
+          "Series Title": titleOfSeries,
+          "Series No": seriesNo,
+          "Authors": authors.join(', '),
+          "Illustrators": illustrators.join(', '),
+          "Format": `${formDesc} (${epubDesc})`,
+          "BASIC Main Subject": basicMainSubject,
+          "Fiction/Non-Fiction": fictionStatus,
+          "All BISAC Codes": bisacCodes.join(' | '),
+          "Age Limit": ageLimit,
+          "Grade Range": gradeRange,
+          "Keywords": keywords,
+          "Short Description": shortDescription,
+          "Long Description": longDescription,
+          "Rights Countries": rightsCountry,
+          "Supply To Countries": supplyToCountry,
+          "Publisher": publisher,
+          "Imprint": imprint,
+          "Price": `${currency} ${priceAmount}`
+        };
+        parsedBooks.push(bookData);
 
-        // Complexity (Lexile, Grade Level, Guided Reading)
-        const complexities = Array.from(product.querySelectorAll('Complexity')).map(c => {
-          const scheme = getDirectText(c, 'ComplexitySchemeIdentifier');
-          const code = getDirectText(c, 'ComplexityCode');
-          let label = 'Score';
-          if (scheme === '06') label = 'Lexile';
-          if (scheme === '07') label = 'Grade Level';
-          if (scheme === '02') label = 'Guided Reading';
-          return `<span class="bg-indigo-50 text-indigo-700 px-2 py-1 rounded text-xs font-semibold mr-2">${label}: ${code}</span>`;
-        }).join('');
-
-        // Render Card
+        // Render Cards
         const cardHTML = `
           <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col md:flex-row hover:shadow-md transition">
-            <!-- Cover Image Container -->
-            <div class="w-full md:w-48 bg-slate-100 p-4 flex items-center justify-center shrink-0 border-b md:border-b-0 md:border-r border-slate-200">
+            <!-- Cover -->
+            <div class="w-full md:w-52 bg-slate-100 p-4 flex items-center justify-center shrink-0 border-b md:border-b-0 md:border-r border-slate-200">
               ${imageLink ? 
-                `<img src="${imageLink}" alt="Cover image" class="max-h-56 object-contain rounded shadow-sm" loading="lazy" onerror="this.onerror=null; this.src='https://via.placeholder.com/150x200?text=No+Cover';">` : 
-                `<div class="text-slate-400 text-xs text-center p-8">No Cover Image Available</div>`
+                `<img src="${imageLink}" alt="Cover image" class="max-h-60 object-contain rounded shadow-sm" loading="lazy" onerror="this.onerror=null; this.src='https://via.placeholder.com/150x200?text=No+Cover';">` : 
+                `<div class="text-slate-400 text-xs text-center p-8">No Cover Image</div>`
               }
             </div>
 
-            <!-- Content Container -->
+            <!-- Content -->
             <div class="p-6 flex-1 flex flex-col justify-between">
               <div>
                 <!-- Top Tags -->
                 <div class="flex flex-wrap items-center gap-2 mb-2">
                   <span class="bg-indigo-600 text-white text-xs font-bold px-2.5 py-0.5 rounded">ISBN: ${isbn13}</span>
-                  <span class="bg-slate-200 text-slate-700 text-xs font-semibold px-2 py-0.5 rounded">${format}</span>
-                  ${series ? `<span class="bg-purple-100 text-purple-800 text-xs font-semibold px-2 py-0.5 rounded">Series: ${series}</span>` : ''}
-                  <span class="text-slate-400 text-xs">Ref: ${biblioId}</span>
+                  <span class="bg-slate-800 text-white text-xs font-semibold px-2 py-0.5 rounded">${fictionStatus}</span>
+                  <span class="bg-slate-200 text-slate-700 text-xs font-semibold px-2 py-0.5 rounded">${formDesc}</span>
+                  ${titleOfSeries ? `<span class="bg-purple-100 text-purple-800 text-xs font-semibold px-2 py-0.5 rounded">Series: ${titleOfSeries}${seriesNo ? '#' + seriesNo : ''}</span>` : ''}
                 </div>
 
-                <!-- Title & Subtitle -->
+                <!-- Title & Authors -->
                 <h2 class="text-2xl font-bold text-slate-900 leading-tight">${title}</h2>
-                ${subtitle ? `<p class="text-slate-500 font-medium text-sm mt-0.5">${subtitle}</p>` : ''}
+                <div class="mt-2 flex flex-wrap gap-2 text-xs">
+                  ${authors.map(a => `<span class="bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded">✍️ Author: <b>${a}</b></span>`).join('')}
+                  ${illustrators.map(i => `<span class="bg-pink-50 text-pink-700 border border-pink-200 px-2 py-0.5 rounded">🎨 Illustrator: <b>${i}</b></span>`).join('')}
+                </div>
 
-                <!-- Authors -->
-                <div class="mt-2 flex flex-wrap items-center">
-                  ${contributors}
+                <!-- BISAC Subjects -->
+                <div class="mt-3">
+                  <span class="text-xs font-semibold text-slate-500 mr-2">BISAC/Subjects:</span>
+                  <span class="text-xs bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 rounded mr-1">Main: ${basicMainSubject}</span>
+                  ${bisacCodes.map(b => `<span class="inline-block bg-slate-100 text-slate-700 text-[11px] px-2 py-0.5 rounded mr-1 mt-1">${b}</span>`).join('')}
+                </div>
+
+                <!-- Audience / Age / Grade -->
+                <div class="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-slate-600">
+                  ${ageLimit ? `<span class="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded">🎯 Age: ${ageLimit}</span>` : ''}
+                  ${gradeRange ? `<span class="bg-teal-50 text-teal-700 border border-teal-200 px-2 py-0.5 rounded">🏫 Grade: ${gradeRange}</span>` : ''}
                 </div>
 
                 <!-- Description -->
-                ${description ? `<p class="text-slate-600 text-sm mt-3 line-clamp-3 hover:line-clamp-none transition-all cursor-pointer">${description}</p>` : ''}
+                ${shortDescription ? `<p class="text-slate-600 text-xs mt-3 bg-slate-50 p-3 rounded border border-slate-100 leading-relaxed">${shortDescription}</p>` : ''}
 
-                <!-- Subjects & Keywords -->
-                ${subjects ? `<div class="mt-3 flex flex-wrap">${subjects}</div>` : ''}
+                <!-- Keywords -->
+                ${keywords ? `<div class="mt-3 text-[11px] text-slate-500"><b>Keywords:</b> ${keywords}</div>` : ''}
               </div>
 
-              <!-- Bottom Data Grid -->
-              <div class="mt-6 pt-4 border-t border-slate-100 flex flex-wrap justify-between items-center gap-4 text-xs">
+              <!-- Bottom Details Footer -->
+              <div class="mt-6 pt-4 border-t border-slate-100 flex flex-wrap justify-between items-end gap-4 text-xs">
                 <div class="space-y-1">
-                  <p><span class="font-semibold text-slate-700">Publisher:</span> ${publisher} ${imprint ? `(${imprint})` : ''}</p>
-                  <p><span class="font-semibold text-slate-700">Pub Date:</span> ${pubDate || 'N/A'} ${extentVal ? `• ${extentVal}${extentUnit}` : ''}</p>
+                  <p><b class="text-slate-700">Publisher / Imprint:</b> ${publisher} ${imprint ? '(' + imprint + ')' : ''}</p>
+                  <p><b class="text-slate-700">Rights Territory:</b> ${rightsCountry || 'Global'}</p>
+                  <p><b class="text-slate-700">Supply Territory:</b> ${supplyToCountry ? supplyToCountry.substring(0, 40) + '...' : 'Global'}</p>
                 </div>
 
-                <!-- Reading Level / Complexity -->
-                <div>
-                  ${complexities}
-                </div>
-
-                <!-- Price Block -->
                 <div class="text-right">
                   <div class="text-xl font-black text-slate-900">${currency} ${priceAmount || 'N/A'}</div>
-                  ${priceType ? `<div class="text-[10px] text-slate-400">${priceType}</div>` : ''}
                 </div>
               </div>
             </div>
           </div>
         `;
-
         catalog.innerHTML += cardHTML;
       });
+    }
+
+    // CSV Download Function
+    function exportToCSV() {
+      if (parsedBooks.length === 0) return;
+
+      const headers = Object.keys(parsedBooks[0]);
+      const csvRows = [];
+
+      // Add Headers
+      csvRows.push(headers.map(h => `"${h}"`).join(','));
+
+      // Add Data Rows
+      parsedBooks.forEach(book => {
+        const row = headers.map(header => {
+          let val = book[header] || '';
+          val = val.toString().replace(/"/g, '""'); // Escape Quotes
+          return `"${val}"`;
+        });
+        csvRows.push(row.join(','));
+      });
+
+      // Create Blob & Download Link
+      const csvString = csvRows.join('\n');
+      const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `ONIX_Metadata_Export_${new Date().toISOString().slice(0,10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     }
   </script>
 </body>
