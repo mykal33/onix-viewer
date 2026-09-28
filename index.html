@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ONIX Metadata Viewer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 text-slate-800 p-8">
+  <div class="max-w-5xl mx-auto">
+    <header class="mb-8 text-center">
+      <h1 class="text-3xl font-bold text-slate-900">ONIX Metadata Viewer</h1>
+      <p class="text-slate-600 mt-2">Upload your ONIX XML file to view clean, readable book details.</p>
+    </header>
+
+    <!-- Upload Box -->
+    <div class="border-2 border-dashed border-slate-300 rounded-lg p-8 bg-white text-center hover:border-indigo-500 transition">
+      <input type="file" id="fileInput" accept=".xml" class="hidden" onchange="handleFile(event)">
+      <label for="fileInput" class="cursor-pointer font-medium text-indigo-600 hover:text-indigo-800">
+        Click to upload ONIX XML
+      </label>
+      <span class="text-slate-500"> or drag and drop</span>
+    </div>
+
+    <!-- Book Grid Output -->
+    <div id="catalog" class="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6"></div>
+  </div>
+
+  <script>
+    function handleFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        parseONIX(e.target.result);
+      };
+      reader.readAsText(file);
+    }
+
+    function parseONIX(xmlText) {
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+      const catalog = document.getElementById('catalog');
+      catalog.innerHTML = '';
+
+      // Find all Product records (handles ONIX 3.0 and ONIX 2.1 tag names)
+      const products = xmlDoc.querySelectorAll('Product, product');
+
+      if (products.length === 0) {
+        catalog.innerHTML = '<p class="text-red-500 col-span-2">No ONIX product records found in this file.</p>';
+        return;
+      }
+
+      products.forEach(product => {
+        // Extract Title
+        const titleText = product.querySelector('TitleText, b203, TitleElement > TitleText')?.textContent || "Untitled";
+
+        // Extract Author(s)
+        const contributors = Array.from(product.querySelectorAll('Contributor, contributor'))
+          .map(c => c.querySelector('PersonName, b036, KeyNames')?.textContent)
+          .filter(Boolean)
+          .join(', ') || "Unknown Author";
+
+        // Extract ISBN
+        let isbn = "N/A";
+        const ids = product.querySelectorAll('ProductIdentifier, productidentifier');
+        ids.forEach(id => {
+          const type = id.querySelector('ProductIDType, b221')?.textContent;
+          if (type === '15' || type === '03') { // 15 = ISBN-13, 03 = GTIN-13
+            isbn = id.querySelector('IDValue, b244')?.textContent || isbn;
+          }
+        });
+
+        // Extract Publisher
+        const publisher = product.querySelector('PublisherName, b081')?.textContent || "N/A";
+
+        // Extract Price
+        const price = product.querySelector('PriceAmount, j151')?.textContent || "N/A";
+        const currency = product.querySelector('CurrencyCode, j152')?.textContent || "";
+
+        // Render Book Card
+        const card = `
+          <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-6 flex flex-col justify-between">
+            <div>
+              <span class="inline-block px-2 py-1 bg-indigo-50 text-indigo-700 text-xs font-semibold rounded mb-2">ISBN: ${isbn}</span>
+              <h2 class="text-xl font-bold text-slate-900 leading-snug">${titleText}</h2>
+              <p class="text-slate-600 text-sm mt-1">by <span class="font-medium text-slate-800">${contributors}</span></p>
+            </div>
+            <div class="mt-6 border-t border-slate-100 pt-4 text-xs text-slate-500 flex justify-between items-center">
+              <div>
+                <p><strong class="text-slate-700">Publisher:</strong> ${publisher}</p>
+              </div>
+              <div class="text-right">
+                <span class="text-lg font-bold text-slate-800">${currency} ${price}</span>
+              </div>
+            </div>
+          </div>
+        `;
+        catalog.innerHTML += card;
+      });
+    }
+  </script>
+</body>
+</html>
